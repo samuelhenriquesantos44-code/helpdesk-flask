@@ -326,50 +326,32 @@ MENU_HTML = r"""
 PUBLIC_HOME_HTML = r"""
 {% extends 'base.html' %}
 {% block content %}
-  <div class="hero mb-4 d-flex align-items-center">
-    <div class="inner p-4">
-      <h1 class="h3 mb-2">Quem somos</h1>
-      <p class="mb-0 text-muted">Tecnologia para simplificar o seu dia a dia.</p>
+<div class="hero mb-4 d-flex align-items-center">
+  <div class="inner p-4">
+    <h1 class="h3 mb-2">Quem somos</h1>
+    <p class="mb-0 text-muted">Nossa história e objetivo</p>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-12 col-lg-8">
+    <div class="card p-4">
+      <h2 class="h5 mb-3">Nossa história</h2>
+      <p>Texto contando a história da empresa...</p>
+      <h2 class="h5 mt-4 mb-3">Nosso objetivo</h2>
+      <p>Texto sobre objetivo e missão...</p>
     </div>
   </div>
-
-  <div class="row g-4">
-    <div class="col-12 col-xl-8">
-      <div class="card p-4 mb-4">
-        <h2 class="h5">Nossa história</h2>
-        <p>Começamos pequenos, resolvendo chamados de TI dentro de casa. Crescemos ouvindo nossos usuários e transformando dores em funcionalidades simples, diretas e seguras.</p>
-        <p>Hoje, nosso Help Desk conecta pessoas, equipes e resultados com um fluxo leve: abrir, acompanhar, resolver — e aprender com cada interação.</p>
-      </div>
-
-      <div class="card p-4 mb-4">
-        <h2 class="h5">Propósito</h2>
-        <ul class="mb-0">
-          <li>Reduzir ruído e tempo perdido na comunicação.</li>
-          <li>Dar visibilidade para quem precisa decidir.</li>
-          <li>Garantir rastreabilidade e melhoria contínua.</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="col-12 col-xl-4">
-      <div class="card p-4 mb-4">
-        <h2 class="h6">Comece agora</h2>
-        <div class="d-grid gap-2">
-          <a class="btn btn-primary" href="/login">Entrar</a>
-          <a class="btn btn-outline-secondary" href="{{ url_for('register') }}">Criar conta</a>
-        </div>
-      </div>
-
-      <div class="card p-4">
-        <h2 class="h6">Fale conosco</h2>
-        <ul class="list-unstyled mb-0">
-          <li class="mb-2"><i class="bi bi-envelope me-2"></i><a href="mailto:suporte@seusite.com">suporte@seusite.com</a></li>
-          <li class="mb-2"><i class="bi bi-telephone me-2"></i><a href="tel:+5511999999999">+55 (11) 99999-9999</a></li>
-          <li class="mb-2"><i class="bi bi-whatsapp me-2"></i><a href="https://wa.me/5511999999999" target="_blank">WhatsApp</a></li>
-        </ul>
-      </div>
+  <div class="col-12 col-lg-4">
+    <div class="card p-4">
+      <h2 class="h6">Contato</h2>
+      <ul class="list-unstyled mb-0">
+        <li>Email: contato@empresa.com</li>
+        <li>Telefone: (11) 99999-9999</li>
+      </ul>
     </div>
   </div>
+</div>
 {% endblock %}
 """
 
@@ -761,8 +743,6 @@ ADMIN_TICKETS_HTML = r"""
 from jinja2 import DictLoader
 app.jinja_loader = DictLoader({
     'base.html': BASE_HTML,
-    'menu.html': MENU_HTML,                
-    'public_home.html': PUBLIC_HOME_HTML,  
     'index.html': INDEX_HTML,
     'login.html': LOGIN_HTML,
     'register.html': REGISTER_HTML,
@@ -771,7 +751,8 @@ app.jinja_loader = DictLoader({
     'ticket_new.html': TICKET_NEW_HTML,
     'ticket_view.html': TICKET_VIEW_HTML,
     'admin_tickets.html': ADMIN_TICKETS_HTML,
-
+    'public_home.html': PUBLIC_HOME_HTML,
+   })
 # -----------------------------------------------------
 # Rotas
 # -----------------------------------------------------
