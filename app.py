@@ -1,24 +1,3 @@
-"""
-HELP DESK — Versão 3.2 (Flask + SQLite)
----------------------------------------
-Novidades desta release:
-• Dashboard só para ADMIN e cards que levam a listas filtradas
-• Link "Painel admin" visível apenas para admin
-• Correções de redirect (sem url_for('login')) e bug no return da index()
-• Sidebar híbrida (fixa no desktop, off-canvas no mobile)
-• Mantém: Setor/Subcategoria, Perfil (nome/senha), Comentários, Painel Admin
-
-Como rodar
----------
-1) pip install flask==3.0.3 werkzeug==3.0.3 gunicorn==21.2.0
-2) python app.py
-3) http://127.0.0.1:5000
-
-Usuário semente (admin):
-- E-mail: admin@local
-- Senha: admin123
-"""
-
 from __future__ import annotations
 from datetime import datetime
 import os
@@ -779,11 +758,12 @@ ADMIN_TICKETS_HTML = r"""
 """
 
 # Registrar templates
+from jinja2 import DictLoader
 app.jinja_loader = DictLoader({
     'base.html': BASE_HTML,
-    'menu.html': MENU_HTML,
+    'menu.html': MENU_HTML,                
+    'public_home.html': PUBLIC_HOME_HTML,  
     'index.html': INDEX_HTML,
-    'public_home.html': PUBLIC_HOME_HTML
     'login.html': LOGIN_HTML,
     'register.html': REGISTER_HTML,
     'profile.html': PROFILE_HTML,
@@ -791,7 +771,6 @@ app.jinja_loader = DictLoader({
     'ticket_new.html': TICKET_NEW_HTML,
     'ticket_view.html': TICKET_VIEW_HTML,
     'admin_tickets.html': ADMIN_TICKETS_HTML,
-})
 
 # -----------------------------------------------------
 # Rotas
