@@ -1,14 +1,37 @@
+"""
+HELP DESK — Versão 3.2 (Flask + SQLite)
+---------------------------------------
+Novidades desta release:
+• Dashboard só para ADMIN e cards que levam a listas filtradas
+• Link "Painel admin" visível apenas para admin
+• Correções de redirect (sem url_for('login')) e bug no return da index()
+• Sidebar híbrida (fixa no desktop, off-canvas no mobile)
+• Mantém: Setor/Subcategoria, Perfil (nome/senha), Comentários, Painel Admin
+
+Como rodar
+---------
+1) pip install flask==3.0.3 werkzeug==3.0.3 gunicorn==21.2.0
+2) python app.py
+3) http://127.0.0.1:5000
+
+Usuário semente (admin):
+- E-mail: admin@local
+- Senha: admin123
+"""
+
 from __future__ import annotations
 from datetime import datetime
 import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote  # para montar ?next= no login_required
 
 from flask import (
-    Flask, g, redirect, render_template_string, request, session, url_for, flash, jsonify
+    Flask, g, redirect, render_template_string, request, session, url_for, flash
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from jinja2 import DictLoader
 
 # -----------------------------------------------------
 # Config
@@ -57,18 +80,16 @@ CREATE TABLE IF NOT EXISTS comments (
 
 DEPT_MAP = {
     "Suporte": ["Hardware", "Software", "Acesso/Senha", "Impressoras"],
-    "Infra": ["Rede/Wi‑Fi", "Servidores", "Backup", "VPN"],
+    "Infra": ["Rede/Wi-Fi", "Servidores", "Backup", "VPN"],
     "Sistemas": ["ERP", "CRM", "BI/Relatórios", "Integrações"],
     "Financeiro": ["NF/Boletos", "Pagamentos", "Cadastro Fornecedor"],
 }
 
-
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(app.config["DATABASE"]) 
+        g.db = sqlite3.connect(app.config["DATABASE"])
         g.db.row_factory = sqlite3.Row
     return g.db
-
 
 @app.teardown_appcontext
 def close_db(exc):
@@ -76,19 +97,17 @@ def close_db(exc):
     if db is not None:
         db.close()
 
-
 def _column_exists(table: str, name: str) -> bool:
     db = get_db()
     cur = db.execute(f"PRAGMA table_info({table})")
     return any(row[1] == name for row in cur.fetchall())
-
 
 def init_db():
     db = get_db()
     db.executescript(SCHEMA_SQL)
     db.commit()
 
-    # Migrações leves
+    # Migrações leves (para quem veio de versões antigas)
     if not _column_exists("users", "role"):
         db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'cliente'")
         db.commit()
@@ -100,7 +119,7 @@ def init_db():
         db.commit()
 
     # Usuário admin semente
-    cur = db.execute("SELECT * FROM users WHERE email = ?", ("admin@local",))
+    cur = db.execute("SELECT 1 FROM users WHERE email = ?", ("admin@local",))
     if cur.fetchone() is None:
         db.execute(
             "INSERT INTO users (name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -111,7 +130,6 @@ def init_db():
 # -----------------------------------------------------
 # Auth helpers
 # -----------------------------------------------------
-
 def current_user() -> Optional[sqlite3.Row]:
     uid = session.get("user_id")
     if not uid:
@@ -120,23 +138,19 @@ def current_user() -> Optional[sqlite3.Row]:
     cur = db.execute("SELECT id, name, email, role, created_at FROM users WHERE id = ?", (uid,))
     return cur.fetchone()
 
-
 def login_required(fn):
     from functools import wraps
-
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
-            flash("Faça login para acessar.", "warning")
-            return redirect(url_for("login", next=request.path))
+            nxt = quote(request.path or "/")
+            # usar literal /login evita quebrar se endpoint mudar
+            return redirect(f"/login?next={nxt}")
         return fn(*args, **kwargs)
-
     return wrapper
-
 
 def admin_required(fn):
     from functools import wraps
-
     @wraps(fn)
     def wrapper(*args, **kwargs):
         user = current_user()
@@ -144,11 +158,10 @@ def admin_required(fn):
             flash("Acesso restrito ao admin.", "danger")
             return redirect(url_for("index"))
         return fn(*args, **kwargs)
-
     return wrapper
 
 # -----------------------------------------------------
-# Templates (UI clara + imagens)
+# Templates (UI + Sidebar híbrida)
 # -----------------------------------------------------
 BASE_HTML = r"""
 <!doctype html>
@@ -161,80 +174,175 @@ BASE_HTML = r"""
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
       :root {
-        --bg: #f8fafc;       /* slate-50 */
-        --card: #ffffff;      /* white */
-        --muted: #64748b;     /* slate-500 */
-        --primary: #0ea5e9;   /* sky-500 */
-        --primary-dark: #0284c7; /* sky-600 */
-        --ring: #bae6fd;      /* sky-200 */
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --muted: #64748b;
+        --primary: #0ea5e9;
+        --primary-dark: #0284c7;
+        --ring: #bae6fd;
+        --sidebar: #ffffff;
+        --sidebar-border: #e2e8f0;
       }
       body { background: var(--bg); color: #0f172a; }
-      .navbar { border-bottom: 1px solid #e2e8f0; background: linear-gradient(180deg,#ffffff,#f8fafc); }
-      .card { border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 6px 24px rgba(2,132,199,.08); }
+      a { text-decoration: none; }
+
+      /* Layout com sidebar fixa em >=992px */
+      @media (min-width: 992px) {
+        .layout {
+          display: grid;
+          grid-template-columns: 240px 1fr;
+          gap: 0;
+          min-height: 100vh;
+        }
+        .sidebar {
+          position: sticky;
+          top: 0;
+          height: 100vh;
+          padding: 1rem;
+          border-right: 1px solid var(--sidebar-border);
+          background: linear-gradient(180deg,#fff,#f8fafc);
+        }
+        .main {
+          padding: 1rem 1.25rem 2rem;
+        }
+        .topbar { display: none; } /* esconde topbar em desktop */
+      }
+
+      /* Em <992px usamos topbar + offcanvas */
+      @media (max-width: 991.98px) {
+        .main { padding: 0 1rem 2rem; }
+        .sidebar { display: none; } /* sidebar fixa some e usamos offcanvas */
+        .topbar {
+          border-bottom: 1px solid #e2e8f0;
+          background: linear-gradient(180deg,#ffffff,#f8fafc);
+        }
+      }
+
+      .card {
+        border-radius: 16px; border: 1px solid #e2e8f0;
+        box-shadow: 0 6px 24px rgba(2,132,199,.08);
+      }
       .btn-primary { background: var(--primary); border-color: var(--primary); }
       .btn-primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
       .form-control, .form-select { border-radius: 10px; }
       .badge { font-size: .85rem; }
+
       .hero {
         background: url('https://images.unsplash.com/photo-1556157382-97eda2d62296?q=80&w=1200&auto=format') center/cover no-repeat;
         border-radius: 18px; min-height: 180px; position: relative; overflow: hidden;
       }
       .hero::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(255,255,255,.95),rgba(255,255,255,.4));}
       .hero > .inner{position:relative; z-index:1;}
-      a { text-decoration: none; }
+      .nav-link { color: #0f172a; }
+      .nav-link.active, .nav-link:hover { color: var(--primary-dark); }
+      .menu-section { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing:.04em; margin: .75rem 0 .25rem; }
     </style>
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg mb-3">
-      <div class="container">
-        <a class="navbar-brand fw-semibold" href="{{ url_for('index') }}">🛟 Help Desk</a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarsExample" aria-controls="navbarsExample" aria-expanded="false" aria-label="Toggle navigation">
-          <span class="navbar-toggler-icon"></span>
+    <!-- Topbar (mobile) -->
+    <nav class="topbar navbar navbar-light px-2">
+      <div class="container-fluid">
+        <button class="btn btn-outline-secondary" data-bs-toggle="offcanvas" data-bs-target="#offcanvasMenu">
+          ☰
         </button>
-        <div class="collapse navbar-collapse" id="navbarsExample">
-          <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-            {% if user %}
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('tickets') }}">Meus chamados</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('ticket_new') }}">Abrir chamado</a></li>
-            {% if user.role == 'admin' %}
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_tickets') }}">Admin</a></li>
-            {% endif %}
-            {% endif %}
-          </ul>
-          <ul class="navbar-nav ms-auto">
-            {% if user %}
-              <li class="nav-item"><a class="nav-link" href="{{ url_for('profile') }}"><i class="bi bi-person-circle me-1"></i>Perfil</a></li>
-              <li class="nav-item"><span class="navbar-text mx-2">Olá, {{ user.name.split(' ')[0] }}{% if user.role=='admin' %} (admin){% endif %}</span></li>
-              <li class="nav-item"><a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}">Sair</a></li>
-            {% else %}
-              <li class="nav-item"><a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Entrar</a></li>
-              <li class="nav-item ms-2"><a class="btn btn-outline-secondary btn-sm" href="{{ url_for('register') }}">Criar conta</a></li>
-            {% endif %}
-          </ul>
-        </div>
+        <a class="navbar-brand fw-semibold" href="{{ url_for('index') }}">
+          🛟 Help Desk <span class="badge bg-info text-dark ms-1">V3.2</span>
+        </a>
+        {% if user %}
+          <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('profile') }}"><i class="bi bi-person"></i></a>
+        {% else %}
+          <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Entrar</a>
+        {% endif %}
       </div>
     </nav>
 
-    <main class="container my-4">
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <div class="mb-3">
-            {% for cat, msg in messages %}
-              <div class="alert alert-{{ 'secondary' if cat=='info' else cat }} alert-dismissible fade show" role="alert">
-                {{ msg }}
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-              </div>
-            {% endfor %}
-          </div>
-        {% endif %}
-      {% endwith %}
+    <!-- Offcanvas (mobile) -->
+    <div class="offcanvas offcanvas-start" tabindex="-1" id="offcanvasMenu">
+      <div class="offcanvas-header">
+        <h5 class="offcanvas-title">Menu</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+      </div>
+      <div class="offcanvas-body">
+        {% include 'menu.html' %}
+      </div>
+    </div>
 
-      {% block content %}{% endblock %}
-    </main>
+    <div class="layout">
+      <!-- Sidebar fixa (desktop) -->
+      <aside class="sidebar">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <a class="fw-semibold h5 mb-0" href="{{ url_for('index') }}">🛟 Help Desk</a>
+          <span class="badge bg-info text-dark">V3.2</span>
+        </div>
+        {% include 'menu.html' %}
+      </aside>
+
+      <!-- Conteúdo -->
+      <main class="main container-fluid">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="mb-3">
+              {% for cat, msg in messages %}
+                <div class="alert alert-{{ 'secondary' if cat=='info' else cat }} alert-dismissible fade show" role="alert">
+                  {{ msg }}
+                  <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   </body>
 </html>
+"""
+
+# Menu (reutilizável na sidebar fixa e no offcanvas)
+MENU_HTML = r"""
+<div class="menu">
+  <div class="menu-section">Navegação</div>
+  {% if user %}
+    <ul class="nav flex-column">
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint=='index' %}active{% endif %}" href="{{ url_for('index') }}">
+          <i class="bi bi-speedometer2 me-2"></i>Dashboard
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint=='tickets' %}active{% endif %}" href="{{ url_for('tickets') }}">
+          <i class="bi bi-card-list me-2"></i>Meus chamados
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint=='ticket_new' %}active{% endif %}" href="{{ url_for('ticket_new') }}">
+          <i class="bi bi-plus-square me-2"></i>Abrir chamado
+        </a>
+      </li>
+      {% if user.role=='admin' %}
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint=='admin_tickets' %}active{% endif %}" href="{{ url_for('admin_tickets') }}">
+          <i class="bi bi-wrench-adjustable-circle me-2"></i>Painel admin
+        </a>
+      </li>
+      {% endif %}
+    </ul>
+
+    <div class="menu-section">Conta</div>
+    <ul class="nav flex-column">
+      <li class="nav-item"><a class="nav-link {% if request.endpoint=='profile' %}active{% endif %}" href="{{ url_for('profile') }}"><i class="bi bi-person-circle me-2"></i>Perfil</a></li>
+      <li class="nav-item"><a class="nav-link" href="/logout"><i class="bi bi-box-arrow-right me-2"></i>Sair</a></li>
+    </ul>
+    <div class="mt-3 small text-muted">Olá, {{ user.name.split(' ')[0] }}{% if user.role=='admin' %} (admin){% endif %}</div>
+  {% else %}
+    <ul class="nav flex-column">
+      <li class="nav-item"><a class="nav-link" href="/login"><i class="bi bi-box-arrow-in-right me-2"></i>Entrar</a></li>
+      <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}"><i class="bi bi-person-plus me-2"></i>Criar conta</a></li>
+    </ul>
+  {% endif %}
+</div>
 """
 
 INDEX_HTML = r"""
@@ -250,25 +358,25 @@ INDEX_HTML = r"""
 
   <div class="row g-4 mb-4">
     <div class="col-6 col-lg-3">
-      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=aberto" style="cursor:pointer">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=aberto">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-patch-question-fill"></i><span>Abertos</span></div>
         <div class="display-6">{{ kpis.open }}</div>
       </a>
     </div>
     <div class="col-6 col-lg-3">
-      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=em%20andamento" style="cursor:pointer">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=em%20andamento">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-hourglass-split"></i><span>Em andamento</span></div>
         <div class="display-6">{{ kpis.progress }}</div>
       </a>
     </div>
     <div class="col-6 col-lg-3">
-      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=fechado" style="cursor:pointer">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=fechado">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-check2-circle"></i><span>Fechados</span></div>
         <div class="display-6">{{ kpis.closed }}</div>
       </a>
     </div>
     <div class="col-6 col-lg-3">
-      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}" style="cursor:pointer">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-collection"></i><span>Total</span></div>
         <div class="display-6">{{ kpis.total }}</div>
       </a>
@@ -305,7 +413,7 @@ INDEX_HTML = r"""
           <a class="btn btn-outline-secondary" href="{{ url_for('admin_tickets') }}">🛠️ Painel admin</a>
           {% endif %}
           {% else %}
-          <a class="btn btn-primary" href="{{ url_for('login') }}">Entrar</a>
+          <a class="btn btn-primary" href="/login">Entrar</a>
           <a class="btn btn-outline-secondary" href="{{ url_for('register') }}">Criar conta</a>
           {% endif %}
         </div>
@@ -362,7 +470,7 @@ REGISTER_HTML = r"""
         </div>
         <button class="btn btn-primary" type="submit">Criar</button>
       </form>
-      <p class="mt-3 mb-0">Já possui conta? <a href="{{ url_for('login') }}">Entrar</a>.</p>
+      <p class="mt-3 mb-0">Já possui conta? <a href="/login">Entrar</a>.</p>
     </div>
   </div>
 </div>
@@ -621,10 +729,10 @@ ADMIN_TICKETS_HTML = r"""
 {% endblock %}
 """
 
-# Registrar templates inline
-from jinja2 import DictLoader
+# Registrar templates
 app.jinja_loader = DictLoader({
     'base.html': BASE_HTML,
+    'menu.html': MENU_HTML,
     'index.html': INDEX_HTML,
     'login.html': LOGIN_HTML,
     'register.html': REGISTER_HTML,
@@ -642,7 +750,6 @@ app.jinja_loader = DictLoader({
 def before_request():
     init_db()
 
-
 @app.get("/")
 @login_required
 def index():
@@ -658,11 +765,30 @@ def index():
             "closed":   count("SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
             "total":    count("SELECT COUNT(*) FROM tickets"),
         }
-
     return render_template_string(
         app.jinja_loader.get_source(app.jinja_env, "index.html")[0],
         user=user,
         kpis=(kpis or {})
+    )
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        db = get_db()
+        cur = db.execute("SELECT * FROM users WHERE email = ?", (email,))
+        user = cur.fetchone()
+        if user and check_password_hash(user["password_hash"], password):
+            session.clear()
+            session["user_id"] = user["id"]
+            flash("Login realizado com sucesso.", "success")
+            nxt = request.args.get("next")
+            return redirect(nxt or url_for("index"))
+        flash("Credenciais inválidas.", "danger")
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "login.html")[0],
+        user=current_user()
     )
 
 @app.route("/register", methods=["GET", "POST"])
@@ -682,25 +808,28 @@ def register():
                 )
                 db.commit()
                 flash("Conta criada. Faça login.", "success")
-                return redirect(url_for("login"))
+                return redirect("/login")
             except sqlite3.IntegrityError:
                 flash("E-mail já cadastrado.", "danger")
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'register.html')[0], user=current_user())
-
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "register.html")[0],
+        user=current_user()
+    )
 
 @app.get("/logout")
 @login_required
 def logout():
     session.clear()
     flash("Sessão encerrada.", "info")
-    return redirect(url_for("login"))
-
+    return redirect("/login")
 
 @app.get("/profile")
 @login_required
 def profile():
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'profile.html')[0], user=current_user())
-
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "profile.html")[0],
+        user=current_user()
+    )
 
 @app.post("/profile/name")
 @login_required
@@ -714,7 +843,6 @@ def profile_update_name():
     db.commit()
     flash("Nome atualizado.", "success")
     return redirect(url_for("profile"))
-
 
 @app.post("/profile/password")
 @login_required
@@ -735,13 +863,12 @@ def profile_update_password():
     flash("Senha atualizada.", "success")
     return redirect(url_for("profile"))
 
-
 @app.get("/tickets")
 @login_required
 def tickets():
     db = get_db()
     status = (request.args.get('status') or '').strip()
-    if status in {"aberto","em andamento","fechado"}:
+    if status in {"aberto", "em andamento", "fechado"}:
         cur = db.execute(
             "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE user_id = ? AND status = ? ORDER BY id DESC",
             (session["user_id"], status),
@@ -752,8 +879,11 @@ def tickets():
             (session["user_id"],),
         )
     rows = cur.fetchall()
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'tickets.html')[0], user=current_user(), tickets=rows)
-
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "tickets.html")[0],
+        user=current_user(),
+        tickets=rows
+    )
 
 @app.route("/tickets/novo", methods=["GET", "POST"])
 @login_required
@@ -777,14 +907,17 @@ def ticket_new():
             db.commit()
             flash("Chamado criado com sucesso.", "success")
             return redirect(url_for("tickets"))
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_new.html')[0], user=current_user(), dept_options=list(DEPT_MAP.keys()), dept_map=DEPT_MAP)
-
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "ticket_new.html")[0],
+        user=current_user(),
+        dept_options=list(DEPT_MAP.keys()),
+        dept_map=DEPT_MAP
+    )
 
 @app.get("/tickets/<int:ticket_id>")
 @login_required
 def ticket_view(ticket_id: int):
     db = get_db()
-    # Permite que o dono veja, e admin também
     user = current_user()
     if user and user["role"] == "admin":
         cur = db.execute(
@@ -810,8 +943,11 @@ def ticket_view(ticket_id: int):
         (ticket_id,)
     ).fetchall()
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_view.html')[0], user=current_user(), t=t, comments=comments)
-
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "ticket_view.html")[0],
+        user=current_user(),
+        t=t, comments=comments
+    )
 
 @app.post("/tickets/<int:ticket_id>/status")
 @login_required
@@ -822,7 +958,6 @@ def ticket_update_status(ticket_id: int):
         return redirect(url_for("ticket_view", ticket_id=ticket_id))
 
     db = get_db()
-    # Dono do chamado pode mudar; admin também
     user = current_user()
     if user and user["role"] == "admin":
         db.execute("UPDATE tickets SET status = ? WHERE id = ?", (new_status, ticket_id))
@@ -832,7 +967,6 @@ def ticket_update_status(ticket_id: int):
     flash("Status atualizado.", "success")
     return redirect(url_for("ticket_view", ticket_id=ticket_id))
 
-
 @app.post("/tickets/<int:ticket_id>/comments")
 @login_required
 def ticket_add_comment(ticket_id: int):
@@ -841,7 +975,6 @@ def ticket_add_comment(ticket_id: int):
         flash("Comentário vazio.", "warning")
         return redirect(url_for("ticket_view", ticket_id=ticket_id))
 
-    # Verifica permissão para comentar (dono ou admin)
     db = get_db()
     user = current_user()
     allowed = False
@@ -862,27 +995,28 @@ def ticket_add_comment(ticket_id: int):
     db.commit()
     return redirect(url_for("ticket_view", ticket_id=ticket_id))
 
-
 @app.get("/admin/tickets")
 @login_required
 @admin_required
 def admin_tickets():
     db = get_db()
     status = (request.args.get('status') or '').strip()
-    base_sql = (
-        """
+    base_sql = """
         SELECT t.id, t.title, t.status, t.created_at, t.department, t.subcategory,
                u.name as author_name, u.email as author_email
         FROM tickets t JOIN users u ON u.id = t.user_id
-        """
-    )
+    """
     args = []
-    if status in {"aberto","em andamento","fechado"}:
+    if status in {"aberto", "em andamento", "fechado"}:
         base_sql += " WHERE t.status = ?"
         args.append(status)
     base_sql += " ORDER BY t.id DESC"
     rows = db.execute(base_sql, tuple(args)).fetchall()
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'admin_tickets.html')[0], user=current_user(), tickets=rows)
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "admin_tickets.html")[0],
+        user=current_user(),
+        tickets=rows
+    )
 
 # -----------------------------------------------------
 # Execução
