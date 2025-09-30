@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from flask import (
-    Flask, g, redirect, render_template_string, request, session, url_for, flash
+    Flask, g, redirect, render_template_string, request, session, url_for, flash, jsonify
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     title TEXT NOT NULL,
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'aberto',
+    department TEXT,
+    subcategory TEXT,
     user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id)
@@ -53,6 +55,12 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 """
 
+DEPT_MAP = {
+    "Suporte": ["Hardware", "Software", "Acesso/Senha", "Impressoras"],
+    "Infra": ["Rede/Wi-Fi", "Servidores", "Backup", "VPN"],
+    "Sistemas": ["ERP", "CRM", "BI/Relatórios", "Integrações"],
+    "Financeiro": ["NF/Boletos", "Pagamentos", "Cadastro Fornecedor"],
+}
 
 def get_db():
     if "db" not in g:
@@ -60,28 +68,31 @@ def get_db():
         g.db.row_factory = sqlite3.Row
     return g.db
 
-
 @app.teardown_appcontext
 def close_db(exc):
     db = g.pop("db", None)
     if db is not None:
         db.close()
 
-
 def _column_exists(table: str, name: str) -> bool:
     db = get_db()
     cur = db.execute(f"PRAGMA table_info({table})")
     return any(row[1] == name for row in cur.fetchall())
-
 
 def init_db():
     db = get_db()
     db.executescript(SCHEMA_SQL)
     db.commit()
 
-    # Migração leve: garante coluna role em users (para quem veio da v1)
+    # Migrações leves
     if not _column_exists("users", "role"):
         db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'cliente'")
+        db.commit()
+    if not _column_exists("tickets", "department"):
+        db.execute("ALTER TABLE tickets ADD COLUMN department TEXT")
+        db.commit()
+    if not _column_exists("tickets", "subcategory"):
+        db.execute("ALTER TABLE tickets ADD COLUMN subcategory TEXT")
         db.commit()
 
     # Usuário admin semente
@@ -96,7 +107,6 @@ def init_db():
 # -----------------------------------------------------
 # Auth helpers
 # -----------------------------------------------------
-
 def current_user() -> Optional[sqlite3.Row]:
     uid = session.get("user_id")
     if not uid:
@@ -105,23 +115,18 @@ def current_user() -> Optional[sqlite3.Row]:
     cur = db.execute("SELECT id, name, email, role, created_at FROM users WHERE id = ?", (uid,))
     return cur.fetchone()
 
-
 def login_required(fn):
     from functools import wraps
-
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
             flash("Faça login para acessar.", "warning")
             return redirect(url_for("login", next=request.path))
         return fn(*args, **kwargs)
-
     return wrapper
-
 
 def admin_required(fn):
     from functools import wraps
-
     @wraps(fn)
     def wrapper(*args, **kwargs):
         user = current_user()
@@ -129,7 +134,6 @@ def admin_required(fn):
             flash("Acesso restrito ao admin.", "danger")
             return redirect(url_for("index"))
         return fn(*args, **kwargs)
-
     return wrapper
 
 # -----------------------------------------------------
@@ -143,6 +147,7 @@ BASE_HTML = r"""
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title or 'Help Desk' }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
       :root {
         --bg: #f8fafc;       /* slate-50 */
@@ -187,7 +192,8 @@ BASE_HTML = r"""
           </ul>
           <ul class="navbar-nav ms-auto">
             {% if user %}
-              <li class="nav-item"><span class="navbar-text me-3">Olá, {{ user.name.split(' ')[0] }}{% if user.role=='admin' %} (admin){% endif %}</span></li>
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('profile') }}"><i class="bi bi-person-circle me-1"></i>Perfil</a></li>
+              <li class="nav-item"><span class="navbar-text mx-2">Olá, {{ user.name.split(' ')[0] }}{% if user.role=='admin' %} (admin){% endif %}</span></li>
               <li class="nav-item"><a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}">Sair</a></li>
             {% else %}
               <li class="nav-item"><a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Entrar</a></li>
@@ -230,12 +236,39 @@ INDEX_HTML = r"""
     </div>
   </div>
 
+  <div class="row g-4 mb-4">
+    <div class="col-6 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center gap-2"><i class="bi bi-patch-question-fill"></i><span>Abertos</span></div>
+        <div class="display-6">{{ kpis.open }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center gap-2"><i class="bi bi-hourglass-split"></i><span>Em andamento</span></div>
+        <div class="display-6">{{ kpis.progress }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center gap-2"><i class="bi bi-check2-circle"></i><span>Fechados</span></div>
+        <div class="display-6">{{ kpis.closed }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card p-3">
+        <div class="d-flex align-items-center gap-2"><i class="bi bi-collection"></i><span>Total</span></div>
+        <div class="display-6">{{ kpis.total }}</div>
+      </div>
+    </div>
+  </div>
+
   <div class="row g-4">
     <div class="col-12 col-lg-7">
       <div class="card p-4">
         <h2 class="h5 mb-3">Como funciona?</h2>
         <ul class="mb-0">
-          <li>Abra um chamado descrevendo seu problema.</li>
+          <li>Abra um chamado descrevendo seu problema e selecione setor/subcategoria.</li>
           <li>Acompanhe o status e converse via comentários.</li>
           <li>{% if user and user.role=='admin' %}Como admin, veja todos os chamados no painel.{% else %}Nossa equipe atualiza o status para você.{% endif %}</li>
         </ul>
@@ -316,6 +349,53 @@ REGISTER_HTML = r"""
 {% endblock %}
 """
 
+PROFILE_HTML = r"""
+{% extends 'base.html' %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-lg-8">
+    <div class="card p-4">
+      <h1 class="h5 mb-3">Meu perfil</h1>
+
+      <form method="post" action="{{ url_for('profile_update_name') }}" class="mb-4">
+        <h2 class="h6">Alterar nome</h2>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-8">
+            <label class="form-label">Nome</label>
+            <input class="form-control" type="text" name="name" value="{{ user.name }}" required>
+          </div>
+          <div class="col-md-4">
+            <button class="btn btn-primary w-100" type="submit">Salvar</button>
+          </div>
+        </div>
+      </form>
+
+      <form method="post" action="{{ url_for('profile_update_password') }}">
+        <h2 class="h6">Alterar senha</h2>
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">Senha atual</label>
+            <input class="form-control" type="password" name="current" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Nova senha</label>
+            <input class="form-control" type="password" name="new" minlength="6" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Confirmar nova senha</label>
+            <input class="form-control" type="password" name="new2" minlength="6" required>
+          </div>
+        </div>
+        <div class="mt-3">
+          <button class="btn btn-primary" type="submit">Atualizar senha</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
 TICKETS_HTML = r"""
 {% extends 'base.html' %}
 {% block content %}
@@ -334,6 +414,7 @@ TICKETS_HTML = r"""
             <a class="h5 mb-1" href="{{ url_for('ticket_view', ticket_id=t.id) }}">#{{ t.id }} — {{ t.title }}</a>
             <span class="badge {{ 'bg-success' if t.status=='fechado' else ('bg-warning text-dark' if t.status=='em andamento' else 'bg-secondary') }}">{{ t.status|capitalize }}</span>
           </div>
+          <div class="text-muted small">{{ t.department }}{% if t.subcategory %} · {{ t.subcategory }}{% endif %}</div>
           <div class="text-muted small">Aberto em {{ t.created_at[:19].replace('T',' ') }}</div>
         </div>
         <div>
@@ -361,7 +442,24 @@ TICKET_NEW_HTML = r"""
           <label class="form-label">Título</label>
           <input class="form-control" type="text" name="title" maxlength="120" required>
         </div>
-        <div class="mb-3">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Setor</label>
+            <select class="form-select" name="department" id="department" required>
+              <option value="" selected disabled>Selecione</option>
+              {% for d in dept_options %}
+                <option value="{{ d }}">{{ d }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Subcategoria</label>
+            <select class="form-select" name="subcategory" id="subcategory" required disabled>
+              <option value="" selected>Selecione o setor primeiro</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3 mt-3">
           <label class="form-label">Descrição</label>
           <textarea class="form-control" name="description" rows="6" required></textarea>
         </div>
@@ -371,6 +469,28 @@ TICKET_NEW_HTML = r"""
     </div>
   </div>
 </div>
+
+<script>
+const MAP = {{ dept_map|tojson }};
+const deptSel = document.getElementById('department');
+const subSel = document.getElementById('subcategory');
+if (deptSel) {
+  deptSel.addEventListener('change', () => {
+    const list = MAP[deptSel.value] || [];
+    subSel.innerHTML = '';
+    if (list.length === 0){
+      subSel.innerHTML = '<option value="">Sem opções</option>';
+      subSel.disabled = true;
+      return;
+    }
+    list.forEach(v => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = v; subSel.appendChild(o);
+    });
+    subSel.disabled = false;
+  });
+}
+</script>
 {% endblock %}
 """
 
@@ -383,6 +503,7 @@ TICKET_VIEW_HTML = r"""
       <div class="d-flex justify-content-between align-items-start">
         <div>
           <h1 class="h5 mb-1">#{{ t.id }} — {{ t.title }}</h1>
+          <div class="text-muted small">{{ t.department }}{% if t.subcategory %} · {{ t.subcategory }}{% endif %}</div>
           <div class="text-muted small">Aberto em {{ t.created_at[:19].replace('T',' ') }}</div>
         </div>
         <span class="badge {{ 'bg-success' if t.status=='fechado' else ('bg-warning text-dark' if t.status=='em andamento' else 'bg-secondary') }}">{{ t.status|capitalize }}</span>
@@ -444,7 +565,7 @@ ADMIN_TICKETS_HTML = r"""
     <table class="table align-middle mb-0">
       <thead>
         <tr>
-          <th>ID</th><th>Título</th><th>Autor</th><th>Status</th><th>Aberto em</th><th>Ações</th>
+          <th>ID</th><th>Título</th><th>Autor</th><th>Depto</th><th>Subcat</th><th>Status</th><th>Aberto em</th><th>Ações</th>
         </tr>
       </thead>
       <tbody>
@@ -453,6 +574,8 @@ ADMIN_TICKETS_HTML = r"""
           <td>#{{ t.id }}</td>
           <td><a href="{{ url_for('ticket_view', ticket_id=t.id) }}">{{ t.title }}</a></td>
           <td>{{ t.author_name }} ({{ t.author_email }})</td>
+          <td>{{ t.department }}</td>
+          <td>{{ t.subcategory }}</td>
           <td>
             <span class="badge {{ 'bg-success' if t.status=='fechado' else ('bg-warning text-dark' if t.status=='em andamento' else 'bg-secondary') }}">{{ t.status|capitalize }}</span>
           </td>
@@ -485,6 +608,7 @@ app.jinja_loader = DictLoader({
     'index.html': INDEX_HTML,
     'login.html': LOGIN_HTML,
     'register.html': REGISTER_HTML,
+    'profile.html': PROFILE_HTML,
     'tickets.html': TICKETS_HTML,
     'ticket_new.html': TICKET_NEW_HTML,
     'ticket_view.html': TICKET_VIEW_HTML,
@@ -498,11 +622,29 @@ app.jinja_loader = DictLoader({
 def before_request():
     init_db()
 
-
 @app.get("/")
+@login_required
 def index():
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], user=current_user())
+    db = get_db()
+    user = current_user()
+    # KPIs: se admin, gerais; senão, do usuário
+    if user and user["role"] == "admin":
+        where = ""
+        args = ()
+    else:
+        where = "WHERE user_id = ?"
+        args = (session["user_id"],)
 
+    def count(q, a=args):
+        return get_db().execute(q, a).fetchone()[0]
+
+    kpis = {
+        'open': count(f"SELECT COUNT(*) FROM tickets {where} AND status='aberto'" if where else "SELECT COUNT(*) FROM tickets WHERE status='aberto'"),
+        'progress': count(f"SELECT COUNT(*) FROM tickets {where} AND status='em andamento'" if where else "SELECT COUNT(*) FROM tickets WHERE status='em andamento'"),
+        'closed': count(f"SELECT COUNT(*) FROM tickets {where} AND status='fechado'" if where else "SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
+        'total': count(f"SELECT COUNT(*) FROM tickets {where}" if where else "SELECT COUNT(*) FROM tickets"),
+    }
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], user=user, kpis=kpis)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -517,10 +659,9 @@ def login():
             session["user_id"] = user["id"]
             flash("Login realizado com sucesso.", "success")
             nxt = request.args.get("next")
-            return redirect(nxt or url_for("tickets"))
+            return redirect(nxt or url_for("index"))
         flash("Credenciais inválidas.", "danger")
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'login.html')[0], user=current_user())
-
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -544,7 +685,6 @@ def register():
                 flash("E-mail já cadastrado.", "danger")
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'register.html')[0], user=current_user())
 
-
 @app.get("/logout")
 @login_required
 def logout():
@@ -552,18 +692,53 @@ def logout():
     flash("Sessão encerrada.", "info")
     return redirect(url_for("login"))
 
+@app.get("/profile")
+@login_required
+def profile():
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'profile.html')[0], user=current_user())
+
+@app.post("/profile/name")
+@login_required
+def profile_update_name():
+    name = (request.form.get("name") or "").strip()
+    if not name:
+        flash("Nome inválido.", "warning")
+        return redirect(url_for("profile"))
+    db = get_db()
+    db.execute("UPDATE users SET name = ? WHERE id = ?", (name, session["user_id"]))
+    db.commit()
+    flash("Nome atualizado.", "success")
+    return redirect(url_for("profile"))
+
+@app.post("/profile/password")
+@login_required
+def profile_update_password():
+    current = request.form.get("current", "")
+    new = request.form.get("new", "")
+    new2 = request.form.get("new2", "")
+    if not new or new != new2:
+        flash("Nova senha não confere.", "danger")
+        return redirect(url_for("profile"))
+    db = get_db()
+    user = db.execute("SELECT password_hash FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    if not user or not check_password_hash(user["password_hash"], current):
+        flash("Senha atual incorreta.", "danger")
+        return redirect(url_for("profile"))
+    db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(new), session["user_id"]))
+    db.commit()
+    flash("Senha atualizada.", "success")
+    return redirect(url_for("profile"))
 
 @app.get("/tickets")
 @login_required
 def tickets():
     db = get_db()
     cur = db.execute(
-        "SELECT id, title, description, status, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC",
+        "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC",
         (session["user_id"],),
     )
     rows = cur.fetchall()
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'tickets.html')[0], user=current_user(), tickets=rows)
-
 
 @app.route("/tickets/novo", methods=["GET", "POST"])
 @login_required
@@ -571,19 +746,23 @@ def ticket_new():
     if request.method == "POST":
         title = request.form.get("title", "").strip()
         desc = request.form.get("description", "").strip()
-        if not title or not desc:
-            flash("Preencha título e descrição.", "warning")
+        dept = request.form.get("department", "").strip()
+        subc = request.form.get("subcategory", "").strip()
+        if not title or not desc or not dept or not subc:
+            flash("Preencha título, setor e subcategoria.", "warning")
         else:
             db = get_db()
             db.execute(
-                "INSERT INTO tickets (title, description, status, user_id, created_at) VALUES (?, ?, 'aberto', ?, ?)",
-                (title, desc, session["user_id"], datetime.utcnow().isoformat()),
+                """
+                INSERT INTO tickets (title, description, status, department, subcategory, user_id, created_at)
+                VALUES (?, ?, 'aberto', ?, ?, ?, ?)
+                """,
+                (title, desc, dept, subc, session["user_id"], datetime.utcnow().isoformat()),
             )
             db.commit()
             flash("Chamado criado com sucesso.", "success")
             return redirect(url_for("tickets"))
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_new.html')[0], user=current_user())
-
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_new.html')[0], user=current_user(), dept_options=list(DEPT_MAP.keys()), dept_map=DEPT_MAP)
 
 @app.get("/tickets/<int:ticket_id>")
 @login_required
@@ -593,12 +772,12 @@ def ticket_view(ticket_id: int):
     user = current_user()
     if user and user["role"] == "admin":
         cur = db.execute(
-            "SELECT id, title, description, status, created_at FROM tickets WHERE id = ?",
+            "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE id = ?",
             (ticket_id,),
         )
     else:
         cur = db.execute(
-            "SELECT id, title, description, status, created_at FROM tickets WHERE id = ? AND user_id = ?",
+            "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE id = ? AND user_id = ?",
             (ticket_id, session["user_id"],),
         )
     t = cur.fetchone()
@@ -616,7 +795,6 @@ def ticket_view(ticket_id: int):
     ).fetchall()
 
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_view.html')[0], user=current_user(), t=t, comments=comments)
-
 
 @app.post("/tickets/<int:ticket_id>/status")
 @login_required
@@ -636,7 +814,6 @@ def ticket_update_status(ticket_id: int):
     db.commit()
     flash("Status atualizado.", "success")
     return redirect(url_for("ticket_view", ticket_id=ticket_id))
-
 
 @app.post("/tickets/<int:ticket_id>/comments")
 @login_required
@@ -667,7 +844,6 @@ def ticket_add_comment(ticket_id: int):
     db.commit()
     return redirect(url_for("ticket_view", ticket_id=ticket_id))
 
-
 @app.get("/admin/tickets")
 @login_required
 @admin_required
@@ -675,7 +851,7 @@ def admin_tickets():
     db = get_db()
     rows = db.execute(
         """
-        SELECT t.id, t.title, t.status, t.created_at,
+        SELECT t.id, t.title, t.status, t.created_at, t.department, t.subcategory,
                u.name as author_name, u.email as author_email
         FROM tickets t JOIN users u ON u.id = t.user_id
         ORDER BY t.id DESC
@@ -690,4 +866,4 @@ if __name__ == "__main__":
     Path(app.config["DATABASE"]).touch(exist_ok=True)
     with app.app_context():
         init_db()
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
