@@ -676,7 +676,11 @@ def login():
             nxt = request.args.get("next")
             return redirect(nxt or url_for("index"))
         flash("Credenciais inválidas.", "danger")
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'login.html')[0], user=current_user())
+    return render_template_string(
+    app.jinja_loader.get_source(app.jinja_env, 'index.html')[0],
+    user=user,
+    kpis=kpis or {}
+)
 
 
 @app.route("/register", methods=["GET", "POST"])
