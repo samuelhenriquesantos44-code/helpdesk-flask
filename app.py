@@ -57,10 +57,11 @@ CREATE TABLE IF NOT EXISTS comments (
 
 DEPT_MAP = {
     "Suporte": ["Hardware", "Software", "Acesso/Senha", "Impressoras"],
-    "Infra": ["Rede/Wi-Fi", "Servidores", "Backup", "VPN"],
+    "Infra": ["Rede/Wi‑Fi", "Servidores", "Backup", "VPN"],
     "Sistemas": ["ERP", "CRM", "BI/Relatórios", "Integrações"],
     "Financeiro": ["NF/Boletos", "Pagamentos", "Cadastro Fornecedor"],
 }
+
 
 def get_db():
     if "db" not in g:
@@ -68,16 +69,19 @@ def get_db():
         g.db.row_factory = sqlite3.Row
     return g.db
 
+
 @app.teardown_appcontext
 def close_db(exc):
     db = g.pop("db", None)
     if db is not None:
         db.close()
 
+
 def _column_exists(table: str, name: str) -> bool:
     db = get_db()
     cur = db.execute(f"PRAGMA table_info({table})")
     return any(row[1] == name for row in cur.fetchall())
+
 
 def init_db():
     db = get_db()
@@ -107,6 +111,7 @@ def init_db():
 # -----------------------------------------------------
 # Auth helpers
 # -----------------------------------------------------
+
 def current_user() -> Optional[sqlite3.Row]:
     uid = session.get("user_id")
     if not uid:
@@ -115,18 +120,23 @@ def current_user() -> Optional[sqlite3.Row]:
     cur = db.execute("SELECT id, name, email, role, created_at FROM users WHERE id = ?", (uid,))
     return cur.fetchone()
 
+
 def login_required(fn):
     from functools import wraps
+
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
             flash("Faça login para acessar.", "warning")
             return redirect(url_for("login", next=request.path))
         return fn(*args, **kwargs)
+
     return wrapper
+
 
 def admin_required(fn):
     from functools import wraps
+
     @wraps(fn)
     def wrapper(*args, **kwargs):
         user = current_user()
@@ -134,6 +144,7 @@ def admin_required(fn):
             flash("Acesso restrito ao admin.", "danger")
             return redirect(url_for("index"))
         return fn(*args, **kwargs)
+
     return wrapper
 
 # -----------------------------------------------------
@@ -229,39 +240,48 @@ BASE_HTML = r"""
 INDEX_HTML = r"""
 {% extends 'base.html' %}
 {% block content %}
+  {% if user and user.role=='admin' %}
   <div class="hero mb-4 d-flex align-items-center">
     <div class="inner p-4">
-      <h1 class="h3 mb-2">Atendimento de TI simples e eficiente</h1>
-      <p class="mb-0 text-muted">Abra, acompanhe e resolva chamados em poucos cliques.</p>
+      <h1 class="h3 mb-2">Painel do Administrador</h1>
+      <p class="mb-0 text-muted">Resumo dos chamados da empresa.</p>
     </div>
   </div>
 
   <div class="row g-4 mb-4">
     <div class="col-6 col-lg-3">
-      <div class="card p-3">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=aberto" style="cursor:pointer">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-patch-question-fill"></i><span>Abertos</span></div>
         <div class="display-6">{{ kpis.open }}</div>
-      </div>
+      </a>
     </div>
     <div class="col-6 col-lg-3">
-      <div class="card p-3">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=em%20andamento" style="cursor:pointer">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-hourglass-split"></i><span>Em andamento</span></div>
         <div class="display-6">{{ kpis.progress }}</div>
-      </div>
+      </a>
     </div>
     <div class="col-6 col-lg-3">
-      <div class="card p-3">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}?status=fechado" style="cursor:pointer">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-check2-circle"></i><span>Fechados</span></div>
         <div class="display-6">{{ kpis.closed }}</div>
-      </div>
+      </a>
     </div>
     <div class="col-6 col-lg-3">
-      <div class="card p-3">
+      <a class="card p-3 d-block" href="{{ url_for('admin_tickets') }}" style="cursor:pointer">
         <div class="d-flex align-items-center gap-2"><i class="bi bi-collection"></i><span>Total</span></div>
         <div class="display-6">{{ kpis.total }}</div>
-      </div>
+      </a>
     </div>
   </div>
+  {% else %}
+  <div class="hero mb-4 d-flex align-items-center">
+    <div class="inner p-4">
+      <h1 class="h3 mb-2">Atendimento de TI simples e eficiente</h1>
+      <p class="mb-0 text-muted">Abra, acompanhe e resolva seus chamados.</p>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="row g-4">
     <div class="col-12 col-lg-7">
@@ -622,29 +642,24 @@ app.jinja_loader = DictLoader({
 def before_request():
     init_db()
 
+
 @app.get("/")
 @login_required
 def index():
-    db = get_db()
     user = current_user()
-    # KPIs: se admin, gerais; senão, do usuário
+    # Se não for admin, não precisamos calcular KPIs
+    kpis = None
     if user and user["role"] == "admin":
-        where = ""
-        args = ()
-    else:
-        where = "WHERE user_id = ?"
-        args = (session["user_id"],)
+        def count(q, a=()):
+            return get_db().execute(q, a).fetchone()[0]
+        kpis = {
+            'open': count("SELECT COUNT(*) FROM tickets WHERE status='aberto'"),
+            'progress': count("SELECT COUNT(*) FROM tickets WHERE status='em andamento'"),
+            'closed': count("SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
+            'total': count("SELECT COUNT(*) FROM tickets"),
+        }
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], user=user, kpis=kpis or {})[0], user=user, kpis=kpis)
 
-    def count(q, a=args):
-        return get_db().execute(q, a).fetchone()[0]
-
-    kpis = {
-        'open': count(f"SELECT COUNT(*) FROM tickets {where} AND status='aberto'" if where else "SELECT COUNT(*) FROM tickets WHERE status='aberto'"),
-        'progress': count(f"SELECT COUNT(*) FROM tickets {where} AND status='em andamento'" if where else "SELECT COUNT(*) FROM tickets WHERE status='em andamento'"),
-        'closed': count(f"SELECT COUNT(*) FROM tickets {where} AND status='fechado'" if where else "SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
-        'total': count(f"SELECT COUNT(*) FROM tickets {where}" if where else "SELECT COUNT(*) FROM tickets"),
-    }
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], user=user, kpis=kpis)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -662,6 +677,7 @@ def login():
             return redirect(nxt or url_for("index"))
         flash("Credenciais inválidas.", "danger")
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'login.html')[0], user=current_user())
+
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -685,6 +701,7 @@ def register():
                 flash("E-mail já cadastrado.", "danger")
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'register.html')[0], user=current_user())
 
+
 @app.get("/logout")
 @login_required
 def logout():
@@ -692,10 +709,12 @@ def logout():
     flash("Sessão encerrada.", "info")
     return redirect(url_for("login"))
 
+
 @app.get("/profile")
 @login_required
 def profile():
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'profile.html')[0], user=current_user())
+
 
 @app.post("/profile/name")
 @login_required
@@ -709,6 +728,7 @@ def profile_update_name():
     db.commit()
     flash("Nome atualizado.", "success")
     return redirect(url_for("profile"))
+
 
 @app.post("/profile/password")
 @login_required
@@ -729,16 +749,25 @@ def profile_update_password():
     flash("Senha atualizada.", "success")
     return redirect(url_for("profile"))
 
+
 @app.get("/tickets")
 @login_required
 def tickets():
     db = get_db()
-    cur = db.execute(
-        "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC",
-        (session["user_id"],),
-    )
+    status = (request.args.get('status') or '').strip()
+    if status in {"aberto","em andamento","fechado"}:
+        cur = db.execute(
+            "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE user_id = ? AND status = ? ORDER BY id DESC",
+            (session["user_id"], status),
+        )
+    else:
+        cur = db.execute(
+            "SELECT id, title, description, status, department, subcategory, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC",
+            (session["user_id"],),
+        )
     rows = cur.fetchall()
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'tickets.html')[0], user=current_user(), tickets=rows)
+
 
 @app.route("/tickets/novo", methods=["GET", "POST"])
 @login_required
@@ -763,6 +792,7 @@ def ticket_new():
             flash("Chamado criado com sucesso.", "success")
             return redirect(url_for("tickets"))
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_new.html')[0], user=current_user(), dept_options=list(DEPT_MAP.keys()), dept_map=DEPT_MAP)
+
 
 @app.get("/tickets/<int:ticket_id>")
 @login_required
@@ -796,6 +826,7 @@ def ticket_view(ticket_id: int):
 
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'ticket_view.html')[0], user=current_user(), t=t, comments=comments)
 
+
 @app.post("/tickets/<int:ticket_id>/status")
 @login_required
 def ticket_update_status(ticket_id: int):
@@ -814,6 +845,7 @@ def ticket_update_status(ticket_id: int):
     db.commit()
     flash("Status atualizado.", "success")
     return redirect(url_for("ticket_view", ticket_id=ticket_id))
+
 
 @app.post("/tickets/<int:ticket_id>/comments")
 @login_required
@@ -844,19 +876,26 @@ def ticket_add_comment(ticket_id: int):
     db.commit()
     return redirect(url_for("ticket_view", ticket_id=ticket_id))
 
+
 @app.get("/admin/tickets")
 @login_required
 @admin_required
 def admin_tickets():
     db = get_db()
-    rows = db.execute(
+    status = (request.args.get('status') or '').strip()
+    base_sql = (
         """
         SELECT t.id, t.title, t.status, t.created_at, t.department, t.subcategory,
                u.name as author_name, u.email as author_email
         FROM tickets t JOIN users u ON u.id = t.user_id
-        ORDER BY t.id DESC
         """
-    ).fetchall()
+    )
+    args = []
+    if status in {"aberto","em andamento","fechado"}:
+        base_sql += " WHERE t.status = ?"
+        args.append(status)
+    base_sql += " ORDER BY t.id DESC"
+    rows = db.execute(base_sql, tuple(args)).fetchall()
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'admin_tickets.html')[0], user=current_user(), tickets=rows)
 
 # -----------------------------------------------------
