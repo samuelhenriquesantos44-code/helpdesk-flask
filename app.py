@@ -250,7 +250,8 @@ BASE_HTML = r"""
       <!-- Sidebar fixa (desktop) -->
       <aside class="sidebar">
         <div class="d-flex align-items-center justify-content-between mb-3">
-          <a class="fw-semibold h5 mb-0" href="{{ url_for('index') }}">🛟 Help Desk</a>
+          <a class="navbar-brand fw-semibold" href="{{ url_for('app_home') if user else url_for('public_home') }}">🛟 Help Desk</a>
+
           <span class="badge bg-info text-dark">V3.2</span>
         </div>
         {% include 'menu.html' %}
@@ -761,10 +762,10 @@ def before_request():
     init_db()
 
 @app.get("/")
-def index_public():
-    # Landing pública (sem login)
+def public_home():
+    # Landing pública (quem somos/contato)
     return render_template_string(
-        app.jinja_loader.get_source(app.jinja_env, "public_home.html")[0],
+        app.jinja_loader.get_source(app.jinja_env, 'public_home.html')[0],
         user=current_user()
     )
 
@@ -783,9 +784,8 @@ def app_home():
             "closed":   count("SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
             "total":    count("SELECT COUNT(*) FROM tickets"),
         }
-
     return render_template_string(
-        app.jinja_loader.get_source(app.jinja_env, "index.html")[0],
+        app.jinja_loader.get_source(app.jinja_env, 'index.html')[0],
         user=user,
         kpis=(kpis or {})
     )
