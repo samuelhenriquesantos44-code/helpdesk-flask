@@ -647,41 +647,23 @@ def before_request():
 @login_required
 def index():
     user = current_user()
-    # Se não for admin, não precisamos calcular KPIs
+    # KPIs só para admin
     kpis = None
     if user and user["role"] == "admin":
         def count(q, a=()):
             return get_db().execute(q, a).fetchone()[0]
         kpis = {
-            'open': count("SELECT COUNT(*) FROM tickets WHERE status='aberto'"),
-            'progress': count("SELECT COUNT(*) FROM tickets WHERE status='em andamento'"),
-            'closed': count("SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
-            'total': count("SELECT COUNT(*) FROM tickets"),
+            "open":     count("SELECT COUNT(*) FROM tickets WHERE status='aberto'"),
+            "progress": count("SELECT COUNT(*) FROM tickets WHERE status='em andamento'"),
+            "closed":   count("SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
+            "total":    count("SELECT COUNT(*) FROM tickets"),
         }
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], user=user, kpis=kpis or {})[0], user=user, kpis=kpis)
 
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
-        db = get_db()
-        cur = db.execute("SELECT * FROM users WHERE email = ?", (email,))
-        user = cur.fetchone()
-        if user and check_password_hash(user["password_hash"], password):
-            session.clear()
-            session["user_id"] = user["id"]
-            flash("Login realizado com sucesso.", "success")
-            nxt = request.args.get("next")
-            return redirect(nxt or url_for("index"))
-        flash("Credenciais inválidas.", "danger")
     return render_template_string(
-    app.jinja_loader.get_source(app.jinja_env, 'index.html')[0],
-    user=user,
-    kpis=kpis or {}
-)
-
+        app.jinja_loader.get_source(app.jinja_env, "index.html")[0],
+        user=user,
+        kpis=(kpis or {})
+    )
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
