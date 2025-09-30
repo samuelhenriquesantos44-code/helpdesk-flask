@@ -282,47 +282,56 @@ BASE_HTML = r"""
 
 # Menu (reutilizável na sidebar fixa e no offcanvas)
 MENU_HTML = r"""
-<div class="menu">
-  <div class="menu-section">Navegação</div>
-  {% if user %}
-    <ul class="nav flex-column">
-      <li class="nav-item">
-        <a class="nav-link {% if request.endpoint=='index' %}active{% endif %}" href="{{ url_for('index') }}">
-          <i class="bi bi-speedometer2 me-2"></i>Dashboard
+<!-- Sidebar / Menu lateral -->
+<aside class="d-none d-lg-block" style="width:260px; position:fixed; top:56px; bottom:0; left:0; border-right:1px solid #e2e8f0; background:#fff;">
+  <div class="p-3">
+    <div class="d-flex align-items-center mb-3">
+      <span class="fs-5 fw-semibold">🛟 Help Desk</span>
+      <span class="badge bg-info text-dark ms-2">V3.2</span>
+    </div>
+
+    <div class="text-uppercase text-muted small mb-2">Navegação</div>
+    <ul class="list-unstyled">
+      <li class="mb-2">
+        <a class="d-block px-2 py-1 rounded {{ 'fw-semibold' if request.endpoint=='app_home' }}" href="{{ url_for('app_home') if user else url_for('public_home') }}">
+          <i class="bi bi-speedometer2 me-2"></i> Dashboard
         </a>
       </li>
-      <li class="nav-item">
-        <a class="nav-link {% if request.endpoint=='tickets' %}active{% endif %}" href="{{ url_for('tickets') }}">
-          <i class="bi bi-card-list me-2"></i>Meus chamados
+      {% if user %}
+      <li class="mb-2">
+        <a class="d-block px-2 py-1 rounded {{ 'fw-semibold' if request.endpoint=='tickets' }}" href="{{ url_for('tickets') }}">
+          <i class="bi bi-journal-text me-2"></i> Meus chamados
         </a>
       </li>
-      <li class="nav-item">
-        <a class="nav-link {% if request.endpoint=='ticket_new' %}active{% endif %}" href="{{ url_for('ticket_new') }}">
-          <i class="bi bi-plus-square me-2"></i>Abrir chamado
+      <li class="mb-2">
+        <a class="d-block px-2 py-1 rounded {{ 'fw-semibold' if request.endpoint=='ticket_new' }}" href="{{ url_for('ticket_new') }}">
+          <i class="bi bi-plus-square me-2"></i> Abrir chamado
         </a>
       </li>
-      {% if user.role=='admin' %}
-      <li class="nav-item">
-        <a class="nav-link {% if request.endpoint=='admin_tickets' %}active{% endif %}" href="{{ url_for('admin_tickets') }}">
-          <i class="bi bi-wrench-adjustable-circle me-2"></i>Painel admin
+      {% if user.role == 'admin' %}
+      <li class="mb-2">
+        <a class="d-block px-2 py-1 rounded {{ 'fw-semibold' if request.endpoint=='admin_tickets' }}" href="{{ url_for('admin_tickets') }}">
+          <i class="bi bi-tools me-2"></i> Painel admin
         </a>
       </li>
       {% endif %}
+      {% endif %}
+
+      <div class="text-uppercase text-muted small mt-3 mb-2">Conta</div>
+      {% if user %}
+      <li class="mb-2"><a class="d-block px-2 py-1 rounded {{ 'fw-semibold' if request.endpoint=='profile' }}" href="{{ url_for('profile') }}"><i class="bi bi-person-circle me-2"></i> Perfil</a></li>
+      <li class="mb-2"><a class="d-block px-2 py-1 rounded" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-2"></i> Sair</a></li>
+      {% else %}
+      <li class="mb-2"><a class="d-block px-2 py-1 rounded" href="{{ url_for('login') }}"><i class="bi bi-box-arrow-in-right me-2"></i> Entrar</a></li>
+      <li class="mb-2"><a class="d-block px-2 py-1 rounded" href="{{ url_for('register') }}"><i class="bi bi-person-plus me-2"></i> Criar conta</a></li>
+      {% endif %}
     </ul>
 
-    <div class="menu-section">Conta</div>
-    <ul class="nav flex-column">
-      <li class="nav-item"><a class="nav-link {% if request.endpoint=='profile' %}active{% endif %}" href="{{ url_for('profile') }}"><i class="bi bi-person-circle me-2"></i>Perfil</a></li>
-      <li class="nav-item"><a class="nav-link" href="/logout"><i class="bi bi-box-arrow-right me-2"></i>Sair</a></li>
-    </ul>
-    <div class="mt-3 small text-muted">Olá, {{ user.name.split(' ')[0] }}{% if user.role=='admin' %} (admin){% endif %}</div>
-  {% else %}
-    <ul class="nav flex-column">
-      <li class="nav-item"><a class="nav-link" href="/login"><i class="bi bi-box-arrow-in-right me-2"></i>Entrar</a></li>
-      <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}"><i class="bi bi-person-plus me-2"></i>Criar conta</a></li>
-    </ul>
-  {% endif %}
-</div>
+    {% if user %}
+    <div class="mt-4 text-muted small">Olá, {{ user.name.split(' ')[0] | upper }}</div>
+    {% endif %}
+  </div>
+</aside>
 """
 PUBLIC_HOME_HTML = r"""
 {% extends 'base.html' %}
@@ -744,6 +753,8 @@ ADMIN_TICKETS_HTML = r"""
 from jinja2 import DictLoader
 app.jinja_loader = DictLoader({
     'base.html': BASE_HTML,
+    'menu.html': MENU_HTML,
+    'public_home.html': PUBLIC_HOME_HTML,  
     'index.html': INDEX_HTML,
     'login.html': LOGIN_HTML,
     'register.html': REGISTER_HTML,
@@ -752,7 +763,6 @@ app.jinja_loader = DictLoader({
     'ticket_new.html': TICKET_NEW_HTML,
     'ticket_view.html': TICKET_VIEW_HTML,
     'admin_tickets.html': ADMIN_TICKETS_HTML,
-    'public_home.html': PUBLIC_HOME_HTML,
    })
 # -----------------------------------------------------
 # Rotas
