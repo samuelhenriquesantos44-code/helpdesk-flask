@@ -245,11 +245,11 @@ BASE_HTML = r"""
         <button class="btn btn-outline-secondary" data-bs-toggle="offcanvas" data-bs-target="#offcanvasMenu">
           ☰
         </button>
-        <a class="navbar-brand fw-semibold" href="{{ url_for('index') }}">
+        <a class="nav-link {% if request.endpoint=='app_home' %}active{% endif %}" href="{{ url_for('app_home') }}">
           🛟 Help Desk <span class="badge bg-info text-dark ms-1">V3.2</span>
         </a>
         {% if user %}
-          <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('profile') }}"><i class="bi bi-person"></i></a>
+          <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('app_home') if user else url_for('index_public') }}"><i class="bi bi-person"></i></a>
         {% else %}
           <a class="btn btn-primary btn-sm" href="{{ url_for('login') }}">Entrar</a>
         {% endif %}
@@ -343,6 +343,55 @@ MENU_HTML = r"""
     </ul>
   {% endif %}
 </div>
+"""
+PUBLIC_HOME_HTML = r"""
+{% extends 'base.html' %}
+{% block content %}
+  <div class="hero mb-4 d-flex align-items-center">
+    <div class="inner p-4">
+      <h1 class="h3 mb-2">Quem somos</h1>
+      <p class="mb-0 text-muted">Tecnologia para simplificar o seu dia a dia.</p>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-12 col-xl-8">
+      <div class="card p-4 mb-4">
+        <h2 class="h5">Nossa história</h2>
+        <p>Começamos pequenos, resolvendo chamados de TI dentro de casa. Crescemos ouvindo nossos usuários e transformando dores em funcionalidades simples, diretas e seguras.</p>
+        <p>Hoje, nosso Help Desk conecta pessoas, equipes e resultados com um fluxo leve: abrir, acompanhar, resolver — e aprender com cada interação.</p>
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h2 class="h5">Propósito</h2>
+        <ul class="mb-0">
+          <li>Reduzir ruído e tempo perdido na comunicação.</li>
+          <li>Dar visibilidade para quem precisa decidir.</li>
+          <li>Garantir rastreabilidade e melhoria contínua.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+      <div class="card p-4 mb-4">
+        <h2 class="h6">Comece agora</h2>
+        <div class="d-grid gap-2">
+          <a class="btn btn-primary" href="/login">Entrar</a>
+          <a class="btn btn-outline-secondary" href="{{ url_for('register') }}">Criar conta</a>
+        </div>
+      </div>
+
+      <div class="card p-4">
+        <h2 class="h6">Fale conosco</h2>
+        <ul class="list-unstyled mb-0">
+          <li class="mb-2"><i class="bi bi-envelope me-2"></i><a href="mailto:suporte@seusite.com">suporte@seusite.com</a></li>
+          <li class="mb-2"><i class="bi bi-telephone me-2"></i><a href="tel:+5511999999999">+55 (11) 99999-9999</a></li>
+          <li class="mb-2"><i class="bi bi-whatsapp me-2"></i><a href="https://wa.me/5511999999999" target="_blank">WhatsApp</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+{% endblock %}
 """
 
 INDEX_HTML = r"""
@@ -734,6 +783,7 @@ app.jinja_loader = DictLoader({
     'base.html': BASE_HTML,
     'menu.html': MENU_HTML,
     'index.html': INDEX_HTML,
+    'public_home.html': PUBLIC_HOME_HTML
     'login.html': LOGIN_HTML,
     'register.html': REGISTER_HTML,
     'profile.html': PROFILE_HTML,
@@ -751,8 +801,16 @@ def before_request():
     init_db()
 
 @app.get("/")
+def index_public():
+    # Landing pública (sem login)
+    return render_template_string(
+        app.jinja_loader.get_source(app.jinja_env, "public_home.html")[0],
+        user=current_user()
+    )
+
+@app.get("/app")
 @login_required
-def index():
+def app_home():
     user = current_user()
     # KPIs só para admin
     kpis = None
@@ -765,6 +823,7 @@ def index():
             "closed":   count("SELECT COUNT(*) FROM tickets WHERE status='fechado'"),
             "total":    count("SELECT COUNT(*) FROM tickets"),
         }
+
     return render_template_string(
         app.jinja_loader.get_source(app.jinja_env, "index.html")[0],
         user=user,
@@ -784,7 +843,7 @@ def login():
             session["user_id"] = user["id"]
             flash("Login realizado com sucesso.", "success")
             nxt = request.args.get("next")
-            return redirect(nxt or url_for("index"))
+            return redirect(nxt or url_for("app_home"))
         flash("Credenciais inválidas.", "danger")
     return render_template_string(
         app.jinja_loader.get_source(app.jinja_env, "login.html")[0],
